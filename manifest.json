@@ -1,0 +1,10 @@
+{
+  "name": "ETF配息通",
+  "short_name": "ETF配息通",
+  "description": "台股 ETF 除息、發放日與個人預估現金流追蹤工具",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#04150f",
+  "theme_color": "#04150f",
+  "lang": "zh-Hant"
+}
