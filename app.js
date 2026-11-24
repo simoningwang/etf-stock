@@ -24,31 +24,68 @@
     state.quoteStatus = 'loading';
     if (manual) render();
 
-    try {
-      const codes = window.ETF_CATALOG.map((e) => e.code).join(',');
-      const res = await fetch(`./api/etf?codes=${encodeURIComponent(codes)}`, {
-        signal: AbortSignal.timeout(6000)
-      });
-      if (!res.ok) throw new Error('API unavailable');
-      const data = await res.json();
-      if (!data || !data.quotes || Object.keys(data.quotes).length === 0) {
-        throw new Error('No quotes returned');
-      }
+    const codes = window.ETF_CATALOG.map((e) => e.code).join(',');
+    let gotAnyLive = false;
 
-      for (const etf of window.ETF_CATALOG) {
-        const q = data.quotes[etf.code];
-        if (q && Number.isFinite(q.price) && q.price > 0) {
-          etf.price = q.price;
-          etf.changePct = q.changePct;
-          etf.quoteSource = q.source;
+    const [quoteRes, divRes] = await Promise.allSettled([
+      fetch(`./api/etf?codes=${encodeURIComponent(codes)}`, {
+        signal: AbortSignal.timeout(6500)
+      }),
+      fetch(`./api/dividends?codes=${encodeURIComponent(codes)}`, {
+        signal: AbortSignal.timeout(8000)
+      })
+    ]);
+
+    try {
+      if (quoteRes.status === 'fulfilled' && quoteRes.value.ok) {
+        const data = await quoteRes.value.json();
+        if (data && data.quotes && Object.keys(data.quotes).length > 0) {
+          for (const etf of window.ETF_CATALOG) {
+            const q = data.quotes[etf.code];
+            if (q && Number.isFinite(q.price) && q.price > 0) {
+              etf.price = q.price;
+              etf.changePct = q.changePct;
+              etf.quoteSource = q.source;
+            }
+          }
+          gotAnyLive = true;
+          state.quoteUpdatedAt = data.updatedAt || new Date().toISOString();
         }
       }
-      state.quoteStatus = 'live';
-      state.quoteUpdatedAt = data.updatedAt || new Date().toISOString();
-      if (manual) showToast('已更新最新台股報價');
     } catch (_) {
+      // ignore quote parse error
+    }
+
+    try {
+      if (divRes.status === 'fulfilled' && divRes.value.ok) {
+        const divData = await divRes.value.json();
+        if (divData && divData.dividendsByCode && Object.keys(divData.dividendsByCode).length > 0) {
+          for (const etf of window.ETF_CATALOG) {
+            const dInfo = divData.dividendsByCode[etf.code];
+            if (dInfo && Array.isArray(dInfo.dividends) && dInfo.dividends.length > 0) {
+              etf.dividends = dInfo.dividends;
+              if (Number.isFinite(dInfo.annualDividendPerShare) && dInfo.annualDividendPerShare > 0) {
+                etf.annualDividendPerShare = dInfo.annualDividendPerShare;
+              }
+              if (Array.isArray(dInfo.payoutMonths) && dInfo.payoutMonths.length > 0) {
+                etf.payoutMonths = dInfo.payoutMonths;
+              }
+              etf.dividendSource = 'live';
+            }
+          }
+          gotAnyLive = true;
+        }
+      }
+    } catch (_) {
+      // ignore dividend parse error
+    }
+
+    if (gotAnyLive) {
+      state.quoteStatus = 'live';
+      if (manual) showToast('已更新最新股價與真實配息紀錄');
+    } else {
       state.quoteStatus = 'offline';
-      if (manual) showToast('目前為離線參考價（部署於 Vercel 後可即時更新）');
+      if (manual) showToast('目前為離線參考資料（部署於 Vercel 後可即時更新）');
     }
     render();
   }
@@ -701,9 +738,11 @@
     const yld = etf.price > 0 ? (etf.annualDividendPerShare / etf.price) * 100 : 0;
     const sortedDivs = [...etf.dividends].sort((a, b) => b.exDate.localeCompare(a.exDate));
 
-    // 近 12 個月配息摘要（以最新除息日往回推 365 天，或依最近一年內的紀錄）
-    const latestYear = sortedDivs.length > 0 ? parseInt(sortedDivs[0].exDate.slice(0, 4), 10) : 2026;
-    const recent12m = sortedDivs.filter((d) => parseInt(d.exDate.slice(0, 4), 10) === latestYear);
+    // 近 12 個月配息摘要（從今天往前 365 天內的實際配息）
+    const oneYearAgoDate = new Date();
+    oneYearAgoDate.setFullYear(oneYearAgoDate.getFullYear() - 1);
+    const oneYearAgoStr = oneYearAgoDate.toISOString().slice(0, 10);
+    const recent12m = sortedDivs.filter((d) => d.exDate >= oneYearAgoStr && d.exDate <= TODAY_STR);
     const sum12m = recent12m.reduce((s, d) => s + d.amount, 0);
 
     // 分頁設定（每頁 6 筆）
@@ -718,7 +757,7 @@
       .map((d) => {
         const rocYear = parseInt(d.exDate.slice(0, 4), 10) - 1911;
         const exFormatted = d.exDate.replace(/-/g, '/');
-        const payFormatted = d.payDate.replace(/-/g, '/');
+        const payFormatted = d.payDate.replace(/-/g, '/') + (d.isEstimatedPayDate ? ' (預估)' : '');
         const amtText = Number.isInteger(d.amount * 100) ? d.amount.toFixed(2) : d.amount.toFixed(3);
         return `
         <div class="history-item">
