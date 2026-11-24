@@ -4,10 +4,12 @@
  * 設有 60 秒 CDN 快取，避免過度請求公開來源。
  */
 
-const DEFAULT_CODES = ['0056', '00878', '00919', '00713', '00929', '0050'];
+const DEFAULT_CODES = ['0056', '00878', '00919', '00713', '00937B', '006208', '0050'];
 
 async function fetchFromTWSE(codes) {
-  const exCh = codes.map((c) => `tse_${c}.tw`).join('|');
+  const exCh = codes
+    .map((c) => (c.endsWith('B') ? `otc_${c}.tw` : `tse_${c}.tw`))
+    .join('|');
   const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(exCh)}&json=1&delay=0`;
 
   const res = await fetch(url, {
@@ -50,29 +52,33 @@ async function fetchFromTWSE(codes) {
 }
 
 async function fetchOneFromYahoo(code) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(code)}.TW?interval=1d&range=2d`;
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0' },
-    signal: AbortSignal.timeout(4500)
-  });
-  if (!res.ok) return null;
-  const data = await res.json();
-  const meta = data?.chart?.result?.[0]?.meta;
-  if (!meta || !Number.isFinite(meta.regularMarketPrice)) return null;
+  const suffixes = code.endsWith('B') ? ['.TWO', '.TW'] : ['.TW', '.TWO'];
+  for (const suffix of suffixes) {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(code)}${suffix}?interval=1d&range=2d`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(4500)
+    });
+    if (!res.ok) continue;
+    const data = await res.json();
+    const meta = data?.chart?.result?.[0]?.meta;
+    if (!meta || !Number.isFinite(meta.regularMarketPrice)) continue;
 
-  const price = Number(meta.regularMarketPrice.toFixed(2));
-  const prevClose = Number.isFinite(meta.chartPreviousClose)
-    ? Number(meta.chartPreviousClose.toFixed(2))
-    : price;
+    const price = Number(meta.regularMarketPrice.toFixed(2));
+    const prevClose = Number.isFinite(meta.chartPreviousClose)
+      ? Number(meta.chartPreviousClose.toFixed(2))
+      : price;
 
-  return {
-    code,
-    price,
-    prevClose,
-    change: Number((price - prevClose).toFixed(2)),
-    changePct: prevClose > 0 ? Number((((price - prevClose) / prevClose) * 100).toFixed(2)) : 0,
-    source: 'Yahoo'
-  };
+    return {
+      code,
+      price,
+      prevClose,
+      change: Number((price - prevClose).toFixed(2)),
+      changePct: prevClose > 0 ? Number((((price - prevClose) / prevClose) * 100).toFixed(2)) : 0,
+      source: 'Yahoo'
+    };
+  }
+  return null;
 }
 
 export default async function handler(req, res) {

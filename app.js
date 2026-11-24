@@ -11,7 +11,12 @@
     rankingSort: 'yield',  // 'yield' | 'freq' | 'amount'
     transactions: loadTransactions(),
     quoteStatus: 'idle',   // 'idle' | 'loading' | 'live' | 'offline'
-    quoteUpdatedAt: null
+    quoteUpdatedAt: null,
+    detailCode: null,
+    historyPage: 1,
+    showMonthDetail: false,
+    selectedYear: parseInt(TODAY_STR.slice(0, 4), 10),
+    selectedMonth: parseInt(TODAY_STR.slice(5, 7), 10)
   };
 
   async function fetchLiveQuotes(manual = false) {
@@ -496,14 +501,14 @@
             .map((h) => {
               const yld = h.etf ? (h.etf.annualDividendPerShare / h.etf.price) * 100 : 0;
               return `
-              <div class="card" style="padding: 15px 16px;">
+              <div class="card card-interactive" data-open-etf="${h.code}" style="padding: 15px 16px;">
                 <div class="row-between" style="margin-bottom: 8px;">
                   <div>
                     <div class="payout-code">${h.code} ${h.etf ? h.etf.name : ''}</div>
                     <div class="payout-meta">${h.shares.toLocaleString()} 股 · 均價 ${h.avgCost.toFixed(2)}</div>
                   </div>
                   <div style="text-align:right;">
-                    <div class="payout-amount">${formatNT(h.marketValue)}</div>
+                    <div class="payout-amount">${formatNT(h.marketValue)} <span class="chevron">&rsaquo;</span></div>
                     <div class="payout-meta">年化殖利率 ${yld.toFixed(2)}%</div>
                   </div>
                 </div>
@@ -689,6 +694,233 @@
     `;
   }
 
+  function renderEtfDetail(code) {
+    const etf = getETF(code);
+    if (!etf) return '<div class="card">找不到此 ETF 資料。</div>';
+
+    const yld = etf.price > 0 ? (etf.annualDividendPerShare / etf.price) * 100 : 0;
+    const sortedDivs = [...etf.dividends].sort((a, b) => b.exDate.localeCompare(a.exDate));
+
+    // 近 12 個月配息摘要（以最新除息日往回推 365 天，或依最近一年內的紀錄）
+    const latestYear = sortedDivs.length > 0 ? parseInt(sortedDivs[0].exDate.slice(0, 4), 10) : 2026;
+    const recent12m = sortedDivs.filter((d) => parseInt(d.exDate.slice(0, 4), 10) === latestYear);
+    const sum12m = recent12m.reduce((s, d) => s + d.amount, 0);
+
+    // 分頁設定（每頁 6 筆）
+    const pageSize = 6;
+    const totalCount = sortedDivs.length;
+    const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+    const currentPage = Math.min(Math.max(1, state.historyPage), totalPages);
+    const startIdx = (currentPage - 1) * pageSize;
+    const pageItems = sortedDivs.slice(startIdx, startIdx + pageSize);
+
+    const historyRowsHtml = pageItems
+      .map((d) => {
+        const rocYear = parseInt(d.exDate.slice(0, 4), 10) - 1911;
+        const exFormatted = d.exDate.replace(/-/g, '/');
+        const payFormatted = d.payDate.replace(/-/g, '/');
+        const amtText = Number.isInteger(d.amount * 100) ? d.amount.toFixed(2) : d.amount.toFixed(3);
+        return `
+        <div class="history-item">
+          <div class="history-item-top">
+            <div>
+              <div class="history-amount">NT$ ${amtText}</div>
+              <div class="history-sub">每單位配息</div>
+            </div>
+            <span class="history-roc-year">${rocYear} 年度</span>
+          </div>
+          <div class="history-dates-grid">
+            <div>
+              <div class="history-date-label"><span class="dot-gold"></span> 除息日</div>
+              <div class="history-date-value">${exFormatted}</div>
+            </div>
+            <div>
+              <div class="history-date-label"><span class="dot-green"></span> 發放日</div>
+              <div class="history-date-value">${payFormatted}</div>
+            </div>
+          </div>
+        </div>`;
+      })
+      .join('');
+
+    return `
+      <div class="detail-topbar">
+        <button class="detail-back-btn" id="btn-detail-back" type="button">&lsaquo; 返回</button>
+        <button class="btn btn-primary btn-sm" data-quick-buy="${etf.code}" type="button">+ 新增交易</button>
+      </div>
+
+      <header style="margin-bottom: 16px;">
+        <div class="eyebrow eyebrow-gold">${etf.code} · ${etf.frequency}</div>
+        <h1 class="hero-title" style="font-size: 26px; margin-bottom: 6px;">${etf.code} ${etf.name}</h1>
+        <p class="section-desc">目前參考價 <strong style="color:#fff;">NT$${etf.price.toFixed(2)}</strong> · 預估年化殖利率 <strong style="color:var(--accent-mint);">${yld.toFixed(2)}%</strong></p>
+      </header>
+
+      <div class="card" style="margin-bottom: 22px;">
+        <div class="detail-info-grid">
+          <div>
+            <div class="detail-info-label">投資範圍</div>
+            <div class="detail-info-value">${etf.scope || '台灣成分'}</div>
+          </div>
+          <div>
+            <div class="detail-info-label">發行單位數</div>
+            <div class="detail-info-value">${etf.units || '—'}</div>
+          </div>
+        </div>
+      </div>
+
+      <section class="section-block">
+        <div class="section-header">
+          <div>
+            <div class="eyebrow">12-MONTH SUMMARY</div>
+            <h2 class="section-title">近 12 個月配息摘要</h2>
+          </div>
+        </div>
+        <div class="card">
+          <div class="stats-grid-3">
+            <div class="stat-box">
+              <div class="stat-box-label">每單位合計</div>
+              <div class="stat-box-value">NT$ ${sum12m.toFixed(3).replace(/0$/, '')}</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-label">配息次數</div>
+              <div class="stat-box-value">${recent12m.length} 次</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-label">官方頻率</div>
+              <div class="stat-box-value">${etf.frequency}</div>
+            </div>
+          </div>
+          <p class="disclaimer-text" style="margin-top: 2px;">
+            金額與次數依近 12 個月公告彙整。頻率另依官方政策；待確認不代表不配息，月配也不保證每月配發。
+          </p>
+          <p class="disclaimer-text" style="margin-top: 8px; color: var(--text-secondary);">
+            頻率核對日：${etf.freqCheckedDate || '2026-09-23'}
+          </p>
+        </div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-header">
+          <div>
+            <div class="eyebrow">DIVIDEND HISTORY</div>
+            <h2 class="section-title">歷史配息紀錄</h2>
+          </div>
+          <span class="payout-meta">${totalCount} 筆</span>
+        </div>
+
+        <div class="card history-list-card">
+          ${historyRowsHtml}
+        </div>
+
+        <div class="pagination-bar">
+          <button class="page-btn" id="btn-hist-prev" type="button" ${currentPage <= 1 ? 'disabled' : ''}>&lsaquo; 上一頁</button>
+          <span class="page-indicator">${currentPage} / ${totalPages}</span>
+          <button class="page-btn" id="btn-hist-next" type="button" ${currentPage >= totalPages ? 'disabled' : ''}>下一頁 &rsaquo;</button>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderMonthDetail() {
+    const y = state.selectedYear;
+    const m = state.selectedMonth;
+    const allPayouts = getEligiblePayouts();
+    const monthPayouts = allPayouts.filter((p) => p.payYear === y && p.payMonth === m);
+
+    const monthTotal = monthPayouts.reduce((s, p) => s + p.totalAmount, 0);
+    const monthPaid = monthPayouts
+      .filter((p) => p.isPaid)
+      .reduce((s, p) => s + p.totalAmount, 0);
+    const monthPending = monthTotal - monthPaid;
+
+    const listHtml =
+      monthPayouts.length > 0
+        ? monthPayouts
+            .map((p) => {
+              const exFormatted = p.exDate.replace(/-/g, '/');
+              const payFormatted = p.payDate.replace(/-/g, '/');
+              return `
+              <div class="history-item card-interactive" data-open-etf="${p.code}">
+                <div class="history-item-top">
+                  <div>
+                    <div class="payout-code">${p.code} ${p.name}</div>
+                    <div class="history-sub">${p.shares.toLocaleString()} 股 × ${p.perShare.toFixed(2)} 元</div>
+                  </div>
+                  <div style="text-align:right;">
+                    <div class="history-amount">${formatNT(p.totalAmount)}</div>
+                    <span class="tag ${p.isPaid ? 'tag-eligible' : 'tag-neutral'}" style="margin-top:4px;">${p.isPaid ? '已到發放日' : '待發放'}</span>
+                  </div>
+                </div>
+                <div class="history-dates-grid">
+                  <div>
+                    <div class="history-date-label"><span class="dot-gold"></span> 除息日</div>
+                    <div class="history-date-value">${exFormatted}</div>
+                  </div>
+                  <div>
+                    <div class="history-date-label"><span class="dot-green"></span> 發放日</div>
+                    <div class="history-date-value">${payFormatted}</div>
+                  </div>
+                </div>
+              </div>`;
+            })
+            .join('')
+        : `
+          <div class="history-item" style="text-align:center; padding: 28px 18px;">
+            <div class="card-row-title" style="margin-bottom:6px;">${y} 年 ${m} 月尚無預估入帳</div>
+            <div class="card-row-sub" style="margin-bottom:14px;">可切換其他月份查看，或至「自選」新增買賣紀錄。</div>
+            <button class="btn btn-secondary btn-sm" id="btn-month-add-trade" type="button">+ 新增交易紀錄</button>
+          </div>`;
+
+    return `
+      <div class="detail-topbar">
+        <button class="detail-back-btn" id="btn-month-back" type="button">&lsaquo; 返回動態</button>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <button class="page-btn" id="btn-month-prev" type="button" style="padding:6px 12px;">&lsaquo;</button>
+          <span class="pill-badge" style="padding:6px 12px;">${y} 年 ${m} 月</span>
+          <button class="page-btn" id="btn-month-next" type="button" style="padding:6px 12px;">&rsaquo;</button>
+        </div>
+      </div>
+
+      <header style="margin-bottom: 16px;">
+        <div class="eyebrow">MONTHLY CASH FLOW</div>
+        <h1 class="hero-title" style="font-size: 24px; margin-bottom: 4px;">${m} 月完整入帳明細</h1>
+        <p class="section-desc">依除息日前持有股數自動計算，點擊項目可查看該 ETF 歷史配息</p>
+      </header>
+
+      <div class="card" style="margin-bottom: 20px;">
+        <div class="amount-label">本月預估入帳總額</div>
+        <div class="amount-hero">${formatNT(monthTotal)}</div>
+        <div class="stats-grid-3" style="margin-bottom: 0;">
+          <div class="stat-box">
+            <div class="stat-box-label">已到發放日</div>
+            <div class="stat-box-value emerald">${formatNT(monthPaid)}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-box-label">入帳筆數</div>
+            <div class="stat-box-value">${monthPayouts.length} 筆</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-box-label">待發放</div>
+            <div class="stat-box-value">${formatNT(monthPending)}</div>
+          </div>
+        </div>
+      </div>
+
+      <section class="section-block">
+        <div class="section-header">
+          <div>
+            <div class="eyebrow">PAYOUT BREAKDOWN</div>
+            <h2 class="section-title">入帳項目明細</h2>
+          </div>
+          <span class="payout-meta">${monthPayouts.length} 筆</span>
+        </div>
+        <div class="card history-list-card">
+          ${listHtml}
+        </div>
+      </section>
+    `;
+  }
+
   /* ======================== MODALS ======================== */
 
   function openModal(html) {
@@ -838,7 +1070,9 @@
 
   function render() {
     const main = document.getElementById('main-content');
-    if (state.activeTab === 'dashboard') main.innerHTML = renderDashboard();
+    if (state.detailCode) main.innerHTML = renderEtfDetail(state.detailCode);
+    else if (state.showMonthDetail) main.innerHTML = renderMonthDetail();
+    else if (state.activeTab === 'dashboard') main.innerHTML = renderDashboard();
     else if (state.activeTab === 'calendar') main.innerHTML = renderCalendar();
     else if (state.activeTab === 'watchlist') main.innerHTML = renderWatchlist();
     else if (state.activeTab === 'ranking') main.innerHTML = renderRanking();
@@ -882,10 +1116,11 @@
     const btnMonthDetail = document.getElementById('btn-view-month-detail');
     if (btnMonthDetail) {
       btnMonthDetail.addEventListener('click', () => {
-        const y = parseInt(TODAY_STR.slice(0, 4), 10);
-        const m = parseInt(TODAY_STR.slice(5, 7), 10);
-        const items = getEligiblePayouts().filter((p) => p.payYear === y && p.payMonth === m);
-        openListModal(`${m} 月完整入帳明細`, items);
+        state.selectedYear = parseInt(TODAY_STR.slice(0, 4), 10);
+        state.selectedMonth = parseInt(TODAY_STR.slice(5, 7), 10);
+        state.showMonthDetail = true;
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        render();
       });
     }
 
@@ -987,6 +1222,80 @@
       btnRefreshQuotes.addEventListener('click', () => fetchLiveQuotes(true));
     }
 
+    document.querySelectorAll('[data-open-etf]').forEach((el) => {
+      el.addEventListener('click', () => {
+        state.detailCode = el.dataset.openEtf;
+        state.historyPage = 1;
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        render();
+      });
+    });
+
+    const btnDetailBack = document.getElementById('btn-detail-back');
+    if (btnDetailBack) {
+      btnDetailBack.addEventListener('click', () => {
+        state.detailCode = null;
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        render();
+      });
+    }
+
+    const btnHistPrev = document.getElementById('btn-hist-prev');
+    if (btnHistPrev) {
+      btnHistPrev.addEventListener('click', () => {
+        if (state.historyPage > 1) {
+          state.historyPage -= 1;
+          render();
+        }
+      });
+    }
+
+    const btnHistNext = document.getElementById('btn-hist-next');
+    if (btnHistNext) {
+      btnHistNext.addEventListener('click', () => {
+        state.historyPage += 1;
+        render();
+      });
+    }
+
+    const btnMonthBack = document.getElementById('btn-month-back');
+    if (btnMonthBack) {
+      btnMonthBack.addEventListener('click', () => {
+        state.showMonthDetail = false;
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        render();
+      });
+    }
+
+    const btnMonthPrev = document.getElementById('btn-month-prev');
+    if (btnMonthPrev) {
+      btnMonthPrev.addEventListener('click', () => {
+        state.selectedMonth -= 1;
+        if (state.selectedMonth < 1) {
+          state.selectedMonth = 12;
+          state.selectedYear -= 1;
+        }
+        render();
+      });
+    }
+
+    const btnMonthNext = document.getElementById('btn-month-next');
+    if (btnMonthNext) {
+      btnMonthNext.addEventListener('click', () => {
+        state.selectedMonth += 1;
+        if (state.selectedMonth > 12) {
+          state.selectedMonth = 1;
+          state.selectedYear += 1;
+        }
+        render();
+      });
+    }
+
+    const btnMonthAddTrade = document.getElementById('btn-month-add-trade');
+    if (btnMonthAddTrade) {
+      btnMonthAddTrade.addEventListener('click', () => openAddTradeModal('0056'));
+    }
+
     const btnClearAll = document.getElementById('btn-clear-all');
     if (btnClearAll) {
       btnClearAll.addEventListener('click', () => {
@@ -1001,6 +1310,8 @@
   // Bottom nav clicks
   document.querySelectorAll('.nav-item').forEach((btn) => {
     btn.addEventListener('click', () => {
+      state.detailCode = null;
+      state.showMonthDetail = false;
       state.activeTab = btn.dataset.tab;
       window.scrollTo({ top: 0, behavior: 'smooth' });
       render();
