@@ -1519,14 +1519,25 @@
     window.FirebaseSync.init({
       onAuthChange: (user) => {
         state.user = user;
+        state.cloudSynced = false;
         if (!user) {
-          state.cloudSynced = false;
           state.transactions = loadTransactions();
         }
         render();
       },
       onTransactionsSync: (cloudList) => {
+        const isFirstSync = !state.cloudSynced;
         state.cloudSynced = true;
+        if (isFirstSync && cloudList.length === 0) {
+          const localTx = loadTransactions();
+          if (localTx.length > 0 && state.user) {
+            state.transactions = localTx;
+            window.FirebaseSync.uploadTransactions(state.user.uid, localTx).catch(() => {});
+            render();
+            showToast(`已將本機 ${localTx.length} 筆紀錄自動同步至雲端`);
+            return;
+          }
+        }
         state.transactions = cloudList;
         saveTransactions();
         render();
