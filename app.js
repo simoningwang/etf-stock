@@ -722,6 +722,7 @@
           <p class="card-row-sub" style="margin-bottom: 14px;">
             登入 Google 帳號後，手機與電腦看到的持股與買賣紀錄將自動即時同步（只有你能讀寫自己的資料）。
           </p>
+          ${state.authError ? `<p class="card-row-sub" style="color: var(--accent-danger); margin-bottom: 12px;">${state.authError}</p>` : ''}
           <button class="btn btn-primary btn-full" id="btn-google-signin" type="button">使用 Google 帳號登入並同步</button>
         </div>`;
 
@@ -1421,10 +1422,25 @@
           showToast('Firebase 尚未載入，請確認網路連線');
           return;
         }
+        state.authError = null;
         try {
-          await window.FirebaseSync.signIn();
+          const user = await window.FirebaseSync.signIn();
+          if (user) {
+            state.user = user;
+            render();
+            showToast('已登入：' + (user.email || 'Google 帳號'));
+          }
         } catch (err) {
-          showToast('登入失敗：' + (err && err.message ? err.message : '請檢查網域設定'));
+          const code = err && err.code ? err.code : '';
+          let msg = err && err.message ? err.message : '登入失敗';
+          if (code === 'auth/unauthorized-domain') {
+            msg = `網域「${window.location.hostname}」尚未加入 Firebase 已授權網域，請至 Firebase Console → Authentication → Settings → Authorized domains 新增此網域。`;
+          } else if (code === 'auth/popup-closed-by-user') {
+            msg = '已取消登入視窗';
+          }
+          state.authError = msg;
+          render();
+          showToast(msg);
         }
       });
     }
@@ -1515,8 +1531,15 @@
         saveTransactions();
         render();
       },
-      onError: () => {
-        showToast('雲端同步權限不足，請確認 Firestore 安全規則');
+      onError: (err) => {
+        const code = err && err.code ? err.code : '';
+        const msg =
+          code === 'permission-denied'
+            ? 'Firestore 權限不足，請確認已發布安全規則'
+            : '雲端連線異常：' + (err && err.message ? err.message : code);
+        state.authError = msg;
+        render();
+        showToast(msg);
       }
     });
   }

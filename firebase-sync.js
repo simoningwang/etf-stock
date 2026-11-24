@@ -28,6 +28,11 @@
     auth = window.firebase.auth();
     db = window.firebase.firestore();
 
+    // 處理 redirect 登入回來的結果與錯誤
+    auth.getRedirectResult().catch((err) => {
+      if (err && onError) onError(err);
+    });
+
     auth.onAuthStateChanged((user) => {
       if (unsubscribeSnapshot) {
         unsubscribeSnapshot();
@@ -64,20 +69,20 @@
   async function signIn() {
     if (!auth) throw new Error('Firebase 尚未載入');
     const provider = new window.firebase.auth.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
     try {
-      await auth.signInWithPopup(provider);
+      const result = await auth.signInWithPopup(provider);
+      return result && result.user ? result.user : auth.currentUser;
     } catch (err) {
-      // 手機瀏覽器若阻擋彈窗，自動改用 redirect 登入
       if (
         err &&
         (err.code === 'auth/popup-blocked' ||
-          err.code === 'auth/cancelled-popup-request' ||
           err.code === 'auth/operation-not-supported-in-this-environment')
       ) {
         await auth.signInWithRedirect(provider);
-      } else {
-        throw err;
+        return null;
       }
+      throw err;
     }
   }
 
