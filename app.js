@@ -9,8 +9,44 @@
     activeTab: 'dashboard',
     calendarFilter: 'all', // 'all' | 'holdings'
     rankingSort: 'yield',  // 'yield' | 'freq' | 'amount'
-    transactions: loadTransactions()
+    transactions: loadTransactions(),
+    quoteStatus: 'idle',   // 'idle' | 'loading' | 'live' | 'offline'
+    quoteUpdatedAt: null
   };
+
+  async function fetchLiveQuotes(manual = false) {
+    if (state.quoteStatus === 'loading') return;
+    state.quoteStatus = 'loading';
+    if (manual) render();
+
+    try {
+      const codes = window.ETF_CATALOG.map((e) => e.code).join(',');
+      const res = await fetch(`./api/etf?codes=${encodeURIComponent(codes)}`, {
+        signal: AbortSignal.timeout(6000)
+      });
+      if (!res.ok) throw new Error('API unavailable');
+      const data = await res.json();
+      if (!data || !data.quotes || Object.keys(data.quotes).length === 0) {
+        throw new Error('No quotes returned');
+      }
+
+      for (const etf of window.ETF_CATALOG) {
+        const q = data.quotes[etf.code];
+        if (q && Number.isFinite(q.price) && q.price > 0) {
+          etf.price = q.price;
+          etf.changePct = q.changePct;
+          etf.quoteSource = q.source;
+        }
+      }
+      state.quoteStatus = 'live';
+      state.quoteUpdatedAt = data.updatedAt || new Date().toISOString();
+      if (manual) showToast('已更新最新台股報價');
+    } catch (_) {
+      state.quoteStatus = 'offline';
+      if (manual) showToast('目前為離線參考價（部署於 Vercel 後可即時更新）');
+    }
+    render();
+  }
 
   function loadTransactions() {
     try {
@@ -248,6 +284,18 @@
           <h1 class="hero-title">ETF配息通</h1>
           <p class="hero-subtitle">你的下一筆配息，不用再找。</p>
           <p class="hero-caption">先看個人預估入帳，再掌握全市場除息與發放節奏。</p>
+          <div style="margin-top: 10px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <span class="tag ${state.quoteStatus === 'live' ? 'tag-eligible' : 'tag-neutral'}">
+              ${
+                state.quoteStatus === 'live'
+                  ? '即時報價已連線'
+                  : state.quoteStatus === 'loading'
+                    ? '更新報價中...'
+                    : '離線參考價'
+              }
+            </span>
+            <button class="link-btn" id="btn-refresh-quotes" type="button" style="font-size:12px;">↻ 更新股價</button>
+          </div>
         </div>
         <svg class="hero-art" viewBox="0 0 120 90" fill="none" aria-hidden="true">
           <defs>
@@ -934,6 +982,11 @@
       });
     }
 
+    const btnRefreshQuotes = document.getElementById('btn-refresh-quotes');
+    if (btnRefreshQuotes) {
+      btnRefreshQuotes.addEventListener('click', () => fetchLiveQuotes(true));
+    }
+
     const btnClearAll = document.getElementById('btn-clear-all');
     if (btnClearAll) {
       btnClearAll.addEventListener('click', () => {
@@ -966,4 +1019,5 @@
   });
 
   render();
+  fetchLiveQuotes(false);
 })();
