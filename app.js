@@ -201,7 +201,8 @@
             perShare: div.amount,
             shares,
             totalAmount,
-            isPaid
+            isPaid,
+            isEstimatedPayDate: Boolean(div.isEstimatedPayDate)
           });
         }
       }
@@ -467,6 +468,7 @@
           frequency: etf.frequency,
           exDate: div.exDate,
           payDate: div.payDate,
+          isEstimatedPayDate: Boolean(div.isEstimatedPayDate),
           amount: div.amount,
           eligibleShares,
           hasHolding,
@@ -498,7 +500,7 @@
                 </div>
                 <div class="row-between" style="font-size: 12.5px; color: var(--text-secondary);">
                   <span>除息日：<strong style="color:#fff;">${ev.exDate}</strong></span>
-                  <span>發放日：<strong style="color:#fff;">${ev.payDate}</strong></span>
+                  <span>發放日：<strong style="color:#fff;">${ev.payDate}${ev.isEstimatedPayDate ? ' (預估)' : ''}</strong></span>
                   <span>每股 <strong style="color:var(--accent-mint);">${ev.amount.toFixed(2)}</strong> 元</span>
                 </div>
               </div>`;
@@ -877,7 +879,7 @@
         ? monthPayouts
             .map((p) => {
               const exFormatted = p.exDate.replace(/-/g, '/');
-              const payFormatted = p.payDate.replace(/-/g, '/');
+              const payFormatted = p.payDate.replace(/-/g, '/') + (p.isEstimatedPayDate ? ' (預估)' : '');
               return `
               <div class="history-item card-interactive" data-open-etf="${p.code}">
                 <div class="history-item-top">
