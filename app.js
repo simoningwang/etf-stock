@@ -16,7 +16,9 @@
     historyPage: 1,
     showMonthDetail: false,
     selectedYear: parseInt(TODAY_STR.slice(0, 4), 10),
-    selectedMonth: parseInt(TODAY_STR.slice(5, 7), 10)
+    selectedMonth: parseInt(TODAY_STR.slice(5, 7), 10),
+    user: null,
+    cloudSynced: false
   };
 
   async function fetchLiveQuotes(manual = false) {
@@ -338,6 +340,9 @@
               }
             </span>
             <button class="link-btn" id="btn-refresh-quotes" type="button" style="font-size:12px;">↻ 更新股價</button>
+            <button class="tag ${state.user ? 'tag-eligible' : 'tag-neutral'}" id="btn-hero-cloud" type="button" style="border:none; cursor:pointer; font-family:inherit;">
+              ${state.user ? '☁ 雲端同步中' : '☁ 登入同步'}
+            </button>
           </div>
         </div>
         <svg class="hero-art" viewBox="0 0 120 90" fill="none" aria-hidden="true">
@@ -692,16 +697,45 @@
   }
 
   function renderSettings() {
+    const cloudCardHtml = state.user
+      ? `
+        <div class="card">
+          <div class="row-between" style="margin-bottom: 8px;">
+            <div class="card-row-title" style="margin-bottom:0;">雲端跨裝置同步</div>
+            <span class="tag tag-eligible">即時同步中</span>
+          </div>
+          <p class="card-row-sub" style="margin-bottom: 14px;">
+            已登入：<strong style="color:#fff;">${state.user.email || state.user.displayName || 'Google 帳號'}</strong><br/>
+            你的買賣紀錄會自動同步至所有登入同一帳號的手機與電腦。
+          </p>
+          <div class="form-grid-2">
+            <button class="btn btn-secondary" id="btn-upload-local-to-cloud" type="button">上傳本機紀錄</button>
+            <button class="btn btn-danger" id="btn-google-signout" type="button">登出帳號</button>
+          </div>
+        </div>`
+      : `
+        <div class="card">
+          <div class="row-between" style="margin-bottom: 8px;">
+            <div class="card-row-title" style="margin-bottom:0;">雲端跨裝置同步</div>
+            <span class="tag tag-neutral">未登入</span>
+          </div>
+          <p class="card-row-sub" style="margin-bottom: 14px;">
+            登入 Google 帳號後，手機與電腦看到的持股與買賣紀錄將自動即時同步（只有你能讀寫自己的資料）。
+          </p>
+          <button class="btn btn-primary btn-full" id="btn-google-signin" type="button">使用 Google 帳號登入並同步</button>
+        </div>`;
+
     return `
       <header class="section-header" style="margin-bottom: 16px;">
         <div>
           <div class="eyebrow">PREFERENCES & DATA</div>
           <h1 class="hero-title" style="font-size: 24px; margin-bottom: 4px;">設定與資料備份</h1>
-          <p class="section-desc">所有交易紀錄皆安全儲存在本機瀏覽器中</p>
+          <p class="section-desc">${state.user ? '目前使用 Firebase Firestore 雲端同步' : '目前僅儲存在本機瀏覽器中'}</p>
         </div>
       </header>
 
       <div class="stack-sm">
+        ${cloudCardHtml}
         <div class="card">
           <div class="card-row-title">備份與還原交易紀錄 (JSON)</div>
           <p class="card-row-sub" style="margin-bottom: 14px;">更換手機或電腦時，可匯出 JSON 檔案或直接匯入。</p>
@@ -1034,7 +1068,7 @@
       }
     });
 
-    document.getElementById('form-add-trade').addEventListener('submit', (e) => {
+    document.getElementById('form-add-trade').addEventListener('submit', async (e) => {
       e.preventDefault();
       const newTx = {
         id: 'tx-' + Date.now(),
@@ -1048,6 +1082,16 @@
       saveTransactions();
       closeModal();
       render();
+      if (state.user && window.FirebaseSync) {
+        try {
+          await window.FirebaseSync.saveTransaction(state.user.uid, newTx);
+          showToast(`已新增並同步 ${newTx.code} 交易紀錄`);
+          return;
+        } catch (_) {
+          showToast(`已儲存至本機，但雲端同步失敗`);
+          return;
+        }
+      }
       showToast(`已新增 ${newTx.code} 交易紀錄`);
     });
   }
@@ -1190,11 +1234,21 @@
     }
 
     document.querySelectorAll('[data-delete-tx]').forEach((btn) => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         const id = btn.dataset.deleteTx;
         state.transactions = state.transactions.filter((t) => t.id !== id);
         saveTransactions();
         render();
+        if (state.user && window.FirebaseSync) {
+          try {
+            await window.FirebaseSync.deleteTransaction(state.user.uid, id);
+            showToast('已刪除並同步雲端');
+            return;
+          } catch (_) {
+            showToast('已從本機刪除，雲端刪除失敗');
+            return;
+          }
+        }
         showToast('已刪除交易紀錄');
       });
     });
@@ -1232,13 +1286,18 @@
         const file = e.target.files[0];
         if (!file) return;
         const reader = new FileReader();
-        reader.onload = () => {
+        reader.onload = async () => {
           try {
             const parsed = JSON.parse(reader.result);
             if (!Array.isArray(parsed)) throw new Error('invalid');
             state.transactions = parsed;
             saveTransactions();
             render();
+            if (state.user && window.FirebaseSync) {
+              await window.FirebaseSync.replaceAllTransactions(state.user.uid, parsed);
+              showToast('已匯入並同步至雲端');
+              return;
+            }
             showToast('已成功匯入紀錄');
           } catch (_) {
             showToast('檔案格式不正確');
@@ -1250,10 +1309,20 @@
 
     const btnResetDemo = document.getElementById('btn-reset-demo');
     if (btnResetDemo) {
-      btnResetDemo.addEventListener('click', () => {
-        state.transactions = JSON.parse(JSON.stringify(window.DEFAULT_TRANSACTIONS));
+      btnResetDemo.addEventListener('click', async () => {
+        const demo = JSON.parse(JSON.stringify(window.DEFAULT_TRANSACTIONS));
+        state.transactions = demo;
         saveTransactions();
         render();
+        if (state.user && window.FirebaseSync) {
+          try {
+            await window.FirebaseSync.replaceAllTransactions(state.user.uid, demo);
+            showToast('已恢復範例資料並同步雲端');
+            return;
+          } catch (_) {
+            // ignore
+          }
+        }
         showToast('已恢復範例資料');
       });
     }
@@ -1337,12 +1406,72 @@
       btnMonthAddTrade.addEventListener('click', () => openAddTradeModal('0056'));
     }
 
+    const btnHeroCloud = document.getElementById('btn-hero-cloud');
+    if (btnHeroCloud) {
+      btnHeroCloud.addEventListener('click', () => {
+        state.activeTab = 'settings';
+        render();
+      });
+    }
+
+    const btnGoogleSignIn = document.getElementById('btn-google-signin');
+    if (btnGoogleSignIn) {
+      btnGoogleSignIn.addEventListener('click', async () => {
+        if (!window.FirebaseSync || !window.FirebaseSync.isAvailable()) {
+          showToast('Firebase 尚未載入，請確認網路連線');
+          return;
+        }
+        try {
+          await window.FirebaseSync.signIn();
+        } catch (err) {
+          showToast('登入失敗：' + (err && err.message ? err.message : '請檢查網域設定'));
+        }
+      });
+    }
+
+    const btnGoogleSignOut = document.getElementById('btn-google-signout');
+    if (btnGoogleSignOut) {
+      btnGoogleSignOut.addEventListener('click', async () => {
+        if (window.FirebaseSync) {
+          await window.FirebaseSync.signOut();
+          showToast('已登出帳號');
+        }
+      });
+    }
+
+    const btnUploadLocal = document.getElementById('btn-upload-local-to-cloud');
+    if (btnUploadLocal) {
+      btnUploadLocal.addEventListener('click', async () => {
+        if (!state.user || !window.FirebaseSync) return;
+        const localTx = loadTransactions();
+        if (localTx.length === 0) {
+          showToast('本機目前沒有紀錄可上傳');
+          return;
+        }
+        try {
+          await window.FirebaseSync.uploadTransactions(state.user.uid, localTx);
+          showToast(`已上傳 ${localTx.length} 筆本機紀錄至雲端`);
+        } catch (_) {
+          showToast('上傳失敗，請確認 Firestore 規則已發布');
+        }
+      });
+    }
+
     const btnClearAll = document.getElementById('btn-clear-all');
     if (btnClearAll) {
-      btnClearAll.addEventListener('click', () => {
+      btnClearAll.addEventListener('click', async () => {
         state.transactions = [];
         saveTransactions();
         render();
+        if (state.user && window.FirebaseSync) {
+          try {
+            await window.FirebaseSync.replaceAllTransactions(state.user.uid, []);
+            showToast('已清空本機與雲端紀錄');
+            return;
+          } catch (_) {
+            // ignore
+          }
+        }
         showToast('已清空所有交易紀錄');
       });
     }
@@ -1369,6 +1498,28 @@
       closeModal();
     }
   });
+
+  if (window.FirebaseSync && window.FirebaseSync.isAvailable()) {
+    window.FirebaseSync.init({
+      onAuthChange: (user) => {
+        state.user = user;
+        if (!user) {
+          state.cloudSynced = false;
+          state.transactions = loadTransactions();
+        }
+        render();
+      },
+      onTransactionsSync: (cloudList) => {
+        state.cloudSynced = true;
+        state.transactions = cloudList;
+        saveTransactions();
+        render();
+      },
+      onError: () => {
+        showToast('雲端同步權限不足，請確認 Firestore 安全規則');
+      }
+    });
+  }
 
   render();
   fetchLiveQuotes(false);
