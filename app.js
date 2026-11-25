@@ -458,6 +458,8 @@
 
   function renderCalendar() {
     const holdingsCodes = new Set(getCurrentHoldings().map((h) => h.code));
+    const currentYM = TODAY_STR.slice(0, 7);
+    const currentMonthNum = parseInt(TODAY_STR.slice(5, 7), 10);
     const events = [];
 
     for (const etf of window.ETF_CATALOG) {
@@ -474,6 +476,7 @@
           exDate: div.exDate,
           payDate: div.payDate,
           isEstimatedPayDate: Boolean(div.isEstimatedPayDate),
+          isEstimatedDividend: Boolean(div.isEstimatedDividend),
           amount: div.amount,
           eligibleShares,
           hasHolding,
@@ -482,7 +485,47 @@
       }
     }
 
-    events.sort((a, b) => a.exDate.localeCompare(b.exDate));
+    // 最新在上面，舊的在下面
+    events.sort((a, b) => b.exDate.localeCompare(a.exDate));
+
+    // 最上方：該月份（本月）配息的 ETF（本月除息或本月發放）
+    const thisMonthMap = {};
+    for (const ev of events) {
+      const inThisMonth = ev.exDate.slice(0, 7) === currentYM || ev.payDate.slice(0, 7) === currentYM;
+      if (inThisMonth && !thisMonthMap[ev.code]) {
+        thisMonthMap[ev.code] = ev;
+      }
+    }
+    const thisMonthList = Object.values(thisMonthMap);
+
+    const thisMonthHtml =
+      thisMonthList.length > 0
+        ? thisMonthList
+            .map((ev) => {
+              const exInMonth = ev.exDate.slice(0, 7) === currentYM;
+              const payInMonth = ev.payDate.slice(0, 7) === currentYM;
+              const subText = exInMonth && payInMonth
+                ? `除息 ${formatMD(ev.exDate)} · 發放 ${formatMD(ev.payDate)}`
+                : exInMonth
+                  ? `本月除息 ${formatMD(ev.exDate)}`
+                  : `本月發放 ${formatMD(ev.payDate)}`;
+              return `
+              <div class="payout-row" data-open-etf="${ev.code}">
+                <div class="payout-left">
+                  <span class="dot ${ev.payDate <= TODAY_STR ? '' : 'pending'}"></span>
+                  <div>
+                    <div class="payout-code">${ev.code} ${ev.name}</div>
+                    <div class="payout-meta">${subText} · 每股 ${ev.amount.toFixed(2)} 元</div>
+                  </div>
+                </div>
+                <div class="payout-amount">
+                  ${ev.eligibleShares > 0 ? formatNT(ev.estPayout) : ev.frequency}
+                  <span class="chevron">&rsaquo;</span>
+                </div>
+              </div>`;
+            })
+            .join('')
+        : `<div class="card-row-sub">${currentMonthNum} 月尚無篩選條件內的配息或發放排程。</div>`;
 
     const itemsHtml =
       events.length > 0
@@ -494,18 +537,20 @@
               } else if (ev.hasHolding) {
                 tagHtml = '<span class="tag tag-ineligible">除息日後買入</span>';
               }
+              const showEstPay = ev.isEstimatedPayDate && ev.payDate > TODAY_STR;
               return `
-              <div class="card" style="padding: 14px 16px;">
+              <div class="card card-interactive" data-open-etf="${ev.code}" style="padding: 14px 16px;">
                 <div class="row-between" style="margin-bottom: 8px;">
                   <div>
                     <span class="payout-code">${ev.code}</span>
                     <span class="payout-meta" style="margin-left: 6px;">${ev.name}</span>
+                    ${ev.isEstimatedDividend ? '<span class="pill-badge pill-gold" style="margin-left:6px; padding:2px 8px; font-size:10.5px;">預估下期</span>' : ''}
                   </div>
                   ${tagHtml}
                 </div>
                 <div class="row-between" style="font-size: 12.5px; color: var(--text-secondary);">
-                  <span>除息日：<strong style="color:#fff;">${ev.exDate}</strong></span>
-                  <span>發放日：<strong style="color:#fff;">${ev.payDate}${ev.isEstimatedPayDate ? ' (預估)' : ''}</strong></span>
+                  <span>除息日：<strong style="color:#fff;">${ev.exDate}${ev.isEstimatedDividend ? ' (預估)' : ''}</strong></span>
+                  <span>發放日：<strong style="color:#fff;">${ev.payDate}${showEstPay ? ' (預估)' : ''}</strong></span>
                   <span>每股 <strong style="color:var(--accent-mint);">${ev.amount.toFixed(2)}</strong> 元</span>
                 </div>
               </div>`;
@@ -527,9 +572,33 @@
         <button class="chip ${state.calendarFilter === 'holdings' ? 'active' : ''}" data-cal-filter="holdings" type="button">只看我的持股</button>
       </div>
 
-      <div class="stack-sm">
-        ${itemsHtml}
-      </div>
+      <section class="section-block" style="margin-bottom: 20px;">
+        <div class="section-header">
+          <div>
+            <div class="eyebrow eyebrow-gold">THIS MONTH ETF</div>
+            <h2 class="section-title">${currentMonthNum} 月配息 ETF</h2>
+          </div>
+          <span class="pill-badge">${thisMonthList.length} 檔</span>
+        </div>
+        <div class="card">
+          <div class="payout-list">
+            ${thisMonthHtml}
+          </div>
+        </div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-header">
+          <div>
+            <div class="eyebrow">ALL SCHEDULES</div>
+            <h2 class="section-title">除息與發放排程</h2>
+          </div>
+          <span class="payout-meta">最新在上方 · ${events.length} 筆</span>
+        </div>
+        <div class="stack-sm">
+          ${itemsHtml}
+        </div>
+      </section>
     `;
   }
 
@@ -793,8 +862,9 @@
     const historyRowsHtml = pageItems
       .map((d) => {
         const rocYear = parseInt(d.exDate.slice(0, 4), 10) - 1911;
-        const exFormatted = d.exDate.replace(/-/g, '/');
-        const payFormatted = d.payDate.replace(/-/g, '/') + (d.isEstimatedPayDate ? ' (預估)' : '');
+        const exFormatted = d.exDate.replace(/-/g, '/') + (d.isEstimatedDividend ? ' (預估)' : '');
+        const showEstPay = d.isEstimatedPayDate && d.payDate > TODAY_STR;
+        const payFormatted = d.payDate.replace(/-/g, '/') + (showEstPay ? ' (預估)' : '');
         const amtText = Number.isInteger(d.amount * 100) ? d.amount.toFixed(2) : d.amount.toFixed(3);
         return `
         <div class="history-item">
@@ -914,7 +984,8 @@
         ? monthPayouts
             .map((p) => {
               const exFormatted = p.exDate.replace(/-/g, '/');
-              const payFormatted = p.payDate.replace(/-/g, '/') + (p.isEstimatedPayDate ? ' (預估)' : '');
+              const showEstPay = p.isEstimatedPayDate && p.payDate > TODAY_STR;
+              const payFormatted = p.payDate.replace(/-/g, '/') + (showEstPay ? ' (預估)' : '');
               return `
               <div class="history-item card-interactive" data-open-etf="${p.code}">
                 <div class="history-item-top">

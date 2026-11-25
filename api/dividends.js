@@ -107,6 +107,58 @@ async function fetchTwseUpcoming() {
   return map;
 }
 
+function buildEstimatedNextDividend(merged, todayStr) {
+  if (!merged || merged.length === 0) return null;
+  const latest = merged[0]; // sorted descending by exDate
+  // 若已經有未來的正式除息公告，就不重複預估
+  if (latest.exDate > todayStr) return null;
+
+  // 推算配息週期（月數）：預設依最近兩次除息日間隔判斷（1 / 3 / 6 / 12 個月）
+  let intervalMonths = 3;
+  if (merged.length >= 2) {
+    const d1 = new Date(`${merged[0].exDate}T00:00:00Z`);
+    const d2 = new Date(`${merged[1].exDate}T00:00:00Z`);
+    const rawDiff =
+      (d1.getUTCFullYear() - d2.getUTCFullYear()) * 12 +
+      (d1.getUTCMonth() - d2.getUTCMonth());
+    if (rawDiff <= 1) intervalMonths = 1;
+    else if (rawDiff <= 4) intervalMonths = 3;
+    else if (rawDiff <= 8) intervalMonths = 6;
+    else intervalMonths = 12;
+  }
+
+  const base = new Date(`${latest.exDate}T00:00:00Z`);
+  const target = new Date(
+    Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + intervalMonths, base.getUTCDate())
+  );
+  const estExDate = target.toISOString().slice(0, 10);
+
+  // 取得「下個月」的 YYYY-MM
+  const now = new Date(`${todayStr}T00:00:00Z`);
+  const nextMonthDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const nextMonthYM = nextMonthDate.toISOString().slice(0, 7);
+  const currentYM = todayStr.slice(0, 7);
+
+  const estPayDate = addDays(estExDate, 25);
+  // 若推算的除息日或發放日落在「本月」或「下個月」且在未來，就提供預估
+  if (
+    estExDate > todayStr &&
+    (estExDate.slice(0, 7) === currentYM ||
+      estExDate.slice(0, 7) === nextMonthYM ||
+      estPayDate.slice(0, 7) === nextMonthYM)
+  ) {
+    return {
+      exDate: estExDate,
+      payDate: estPayDate,
+      isEstimatedPayDate: true,
+      isEstimatedDividend: true,
+      amount: latest.amount,
+      source: 'Estimated'
+    };
+  }
+  return null;
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -130,6 +182,7 @@ export default async function handler(req, res) {
   ]);
 
   const now = new Date();
+  const todayStr = toTaipeiDateStr(Math.floor(now.getTime() / 1000));
   const oneYearAgo = new Date(now);
   oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
   const oneYearAgoStr = oneYearAgo.toISOString().slice(0, 10);
@@ -144,10 +197,16 @@ export default async function handler(req, res) {
       mergedMap[item.exDate] = item;
     }
 
-    const merged = Object.values(mergedMap).sort((a, b) => b.exDate.localeCompare(a.exDate));
+    let merged = Object.values(mergedMap).sort((a, b) => b.exDate.localeCompare(a.exDate));
     if (merged.length === 0) return;
 
-    const recent12m = merged.filter((d) => d.exDate >= oneYearAgoStr);
+    // 若下個月尚未有官方公告，依歷史節奏預估下一期
+    const estNext = buildEstimatedNextDividend(merged, todayStr);
+    if (estNext && !mergedMap[estNext.exDate]) {
+      merged = [estNext, ...merged];
+    }
+
+    const recent12m = merged.filter((d) => !d.isEstimatedDividend && d.exDate >= oneYearAgoStr);
     const annualDividendPerShare = Number(
       recent12m.reduce((s, d) => s + d.amount, 0).toFixed(3)
     );
